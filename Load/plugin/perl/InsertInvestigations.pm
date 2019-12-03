@@ -113,6 +113,14 @@ stringArg({name           => 'extDbRlsSpec',
             isList         => 0, }),
 
 
+   booleanArg({name => 'prefixProtocolNamesWithStudyIdentifier',
+          descr => 'if true, prefix all protocol names with the study identifier before loading in database',
+          reqd => 0,
+          constraintFunc => undef,
+          isList => 0,
+         }),
+
+
   ];
 
 my $documentation = { purpose          => "",
@@ -243,7 +251,7 @@ sub run {
 
         my $isatabDatasets = $study->{_insert_investigations_datasets};
 
-        $self->checkProtocolsAndSetIds($study->getProtocols());
+        $self->checkProtocolsAndSetIds($study->getProtocols(), $study);
 
         my $iOntologyTermAccessions = $investigation->getOntologyAccessionsHash();
 
@@ -397,7 +405,7 @@ sub checkMaterialEntitiesHaveMaterialType {
 }
 
 sub checkProtocolsAndSetIds {
-  my ($self, $protocols) = @_;
+  my ($self, $protocols, $study) = @_;
 
   my $sql = "select name, protocol_id from study.protocol";
 
@@ -412,7 +420,9 @@ sub checkProtocolsAndSetIds {
 
   foreach my $protocol (@$protocols) {
     my $protocolName = $protocol->getProtocolName();
-
+    if ($self->getArg("prefixProtocolNamesWithStudyIdentifier")) {
+      $protocolName = prefixProtocolName($protocolName, $study);
+    }
     if($protocols{$protocolName}) {
       $protocol->{_PROTOCOL_ID} = $protocols{$protocolName};
     }
@@ -440,9 +450,9 @@ sub loadStudy {
 ### DISABLE CONSTRAINTS
   my $panNameToIdMap = $self->loadNodes($study->getNodes(), $gusStudy, $charFh);
 
-  my ($protocolParamsToIdMap, $protocolNamesToIdMap) = $self->loadProtocols($study->getProtocols());
+  my ($protocolParamsToIdMap, $protocolNamesToIdMap) = $self->loadProtocols($study->getProtocols(), $study);
 
-  $self->loadEdges($study->getEdges, $panNameToIdMap, $protocolParamsToIdMap, $protocolNamesToIdMap);
+  $self->loadEdges($study->getEdges, $panNameToIdMap, $protocolParamsToIdMap, $protocolNamesToIdMap, $study);
 ### ENABLE CONSTRAINTS
 }
 
@@ -622,7 +632,7 @@ sub getOntologyTermGusObj {
 
 
 sub loadProtocols {
-  my ($self, $protocols) = @_;
+  my ($self, $protocols, $study) = @_;
 
 
   my $ppNameToId = {};
@@ -633,7 +643,9 @@ sub loadProtocols {
     my $gusProtocol;
 
     my $protocolName = $protocol->getProtocolName();
-
+    if ($self->getArg("prefixProtocolNamesWithStudyIdentifier")) {
+      $protocolName = prefixProtocolName($protocolName, $study);
+    }
     if($protocolId) {
       $gusProtocol = GUS::Model::Study::Protocol->new({protocol_id => $protocolId});
       unless($gusProtocol->retrieveFromDB()) {
@@ -653,7 +665,7 @@ sub loadProtocols {
     my @gusProtocolParams = $gusProtocol->getChildren("Study::ProtocolParam", 1);
     my $protocolParams = $protocol->getProtocolParameters();
 
-    next if (scalar (@$protocolParams) == 0);
+#    next if (scalar (@$protocolParams) == 0);
 
 
     foreach my $protocolParam (@$protocolParams) {
@@ -696,7 +708,7 @@ sub loadProtocols {
 
 
 sub loadEdges {
-  my ($self, $edges, $panNameToIdMap, $protocolParamsToIdMap, $protocolNamesToIdMap) = @_;
+  my ($self, $edges, $panNameToIdMap, $protocolParamsToIdMap, $protocolNamesToIdMap, $study) = @_;
 
 
   my $edgeCount;
@@ -726,7 +738,9 @@ sub loadEdges {
 
       if($protocolCount > 1) {
         my @protocolNames = map { $_->getProtocol()->getProtocolName() } @{$edge->getProtocolApplications()};
-
+	if ($self->getArg("prefixProtocolNamesWithStudyIdentifier")) {
+	  @protocolNames = map { prefixProtocolName($_, $study) } @protocolNames;
+	}
         $protocolName = join("; ", @protocolNames);
       }
       else {
@@ -801,6 +815,9 @@ sub loadEdges {
     foreach my $protocolApp (@{$edge->getProtocolApplications()}) {
       my $protocol = $protocolApp->getProtocol();
       my $protocolName = $protocol->getProtocolName();
+      if ($self->getArg("prefixProtocolNamesWithStudyIdentifier")) {
+	$protocolName = prefixProtocolName($protocolName, $study);
+      }
 
       foreach my $parameterValue (@{$protocolApp->getParameterValues()}) {
 
@@ -1157,6 +1174,17 @@ sub undoTables {
     'Study.Study',
      );
 }
+
+
+#
+# helper function to prefix the protocolName with
+# the study identifier, separated with a '|'
+#
+sub prefixProtocolName {
+  my ($protocolName, $study) = @_;
+  return join '|', $study->getIdentifier(), $protocolName;
+}
+
 
 1;
 
