@@ -38,6 +38,7 @@ use GUS::Model::SRes::ExternalDatabase;
 use GUS::Model::SRes::ExternalDatabaseRelease;
 use GUS::Model::ApiDB::GeneFeatureProduct;
 use GUS::Supported::Util;
+use GUS::Supported::OntologyLookup;
 
 # ----------------------------------------------------------
 # Load Arguments
@@ -82,6 +83,13 @@ sub getArgsDeclaration {
 		 descr => 'externaldatabase spec of Sequence Ontology to use',
 		 constraintFunc => undef,
 		 reqd => 1,
+		 isList => 0,
+	       }),
+     stringArg({ name => 'soGusConfigFile',
+		 descr => 'The gus config file for database containing SO term info',
+		 constraintFunc => undef,
+		 reqd => 0,
+	         mustExist => 0,
 		 isList => 0,
 	       }),
      stringArg({ name => 'prefix',
@@ -215,22 +223,32 @@ sub fetchSequenceOntologyId {
   my ($self, $name) = @_;
 
   my $soExternalDatabaseSpec=$self->getArg('soExternalDatabaseSpec');
+  my ($soExtDbName, $soExtDbVer) = split ('\|', $soExternalDatabaseSpec);
+
 
   my $soDbRlsId = 
-      $self->getExtDbRlsId($soExternalDatabaseSpec);
+      ($self->getExtDbRlsId($soExternalDatabaseSpec)) ? $self->getExtDbRlsId($soExternalDatabaseSpec) : $self->getOrCreateExtDbAndDbRls($soExtDbName, $soExtDbVer);
 
   my $SOTerm = GUS::Model::SRes::OntologyTerm->new({'name' => $name,'external_database_release_id' => $soDbRlsId});
 
-  $SOTerm->retrieveFromDB;
+  if($SOTerm->retrieveFromDB) {
+    my $soId = $SOTerm->getId();
+    $self->undefPointerCache();
+    return $soId;
 
-  my $soId = $SOTerm->getId();
+  } else {
+    $self->log("Can't find SO term '$name' in database. adding...\n");
 
-  $self->undefPointerCache();
+    my $soGusConfigFile = $self->getArg('soGusConfigFile') if ($self->getArg('soGusConfigFile'));
+    $soGusConfigFile = $self->getArg('gusConfigFile') unless ($soGusConfigFile);
+    my $soLookup = GUS::Supported::OntologyLookup->new($soExternalDatabaseSpec, $soGusConfigFile);
+    my $soSourceId = $soLookup->getSourceIdFromName($name);
 
-  return $soId;
+    my $newSOTerm = GUS::Model::SRes::OntologyTerm->new({'name' => $name, 'source_id' => $soSourceId, 'external_database_release_id' => $soDbRlsId});
+    $newSOTerm->submit();
+    return ($newSOTerm->getId());
 
-  if (! $SOTerm->getId()) {
-    warn "Error: Can't find SO term '$name' in database.";
+    $self->undefPointerCache();
   }
 }
 
